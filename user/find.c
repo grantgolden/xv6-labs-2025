@@ -26,18 +26,39 @@ find(char *path, char *file_name, int argc, char *argv[])
         return;
     }
 
-    switch(st.type){
-    case T_DEVICE:
-    case T_FILE:
-        //get file name
-        for(p=path+strlen(path); p >= path && *p != '/'; p--)
-            ;
-        p++;
-        if (strcmp(p, file_name) == 0) {
+
+    if (st.type != T_DIR) {
+        fprintf(2, "find: %s not directory \n", path);
+        close(fd);
+        return;
+    }
+
+    if(strlen(path) + 1 + DIRSIZ + 1 > sizeof buf){
+        printf("find: path too long\n");
+        close(fd);
+        return;
+    }
+
+    strcpy(buf, path);
+    p = buf+strlen(buf);
+    *p++ = '/';
+    while(read(fd, &de, sizeof(de)) == sizeof(de)){
+        if(de.inum == 0)
+            continue;
+        memmove(p, de.name, DIRSIZ);
+        p[DIRSIZ] = 0;
+        if(stat(buf, &st) < 0){
+            printf("find: cannot stat %s\n", buf);
+            continue;
+        }
+
+        if ((st.type == T_DIR) && (strcmp(p, ".") != 0) && (strcmp(p, "..") != 0))
+            find(buf, file_name, argc, argv);
+        else if (strcmp(p, file_name) == 0) {
+            printf("%s\n", buf);
             if (!argv)
-                printf("%s\n", path);
+                printf("%s\n", buf);
             else {
-                strcpy(buf, path);
                 int i;
                 for (i = 0; i < argc; i++)
                     ecmd[i] = argv[i];
@@ -53,31 +74,8 @@ find(char *path, char *file_name, int argc, char *argv[])
                 }
             }
         }
-        break;
-
-    case T_DIR:
-        if(strlen(path) + 1 + DIRSIZ + 1 > sizeof buf){
-            printf("find: path too long\n");
-            break;
-        }
-        strcpy(buf, path);
-        p = buf+strlen(buf);
-        *p++ = '/';
-        while(read(fd, &de, sizeof(de)) == sizeof(de)){
-            if(de.inum == 0)
-                continue;
-            if (strcmp(de.name, ".") == 0 || strcmp(de.name, "..") == 0)
-                continue;
-            memmove(p, de.name, DIRSIZ);
-            p[DIRSIZ] = 0;
-            if(stat(buf, &st) < 0){
-                printf("find: cannot stat %s\n", buf);
-                continue;
-            }
-            find(buf, file_name, argc, argv);
-        }
-        break;
     }
+
     close(fd);
 }
 
@@ -97,7 +95,7 @@ main(int argc, char *argv[])
             find(argv[1], argv[2], i, cmd);
         }
     } else
-            find(argv[1], argv[2], 0, 0);
+        find(argv[1], argv[2], 0, 0);
 
 
     exit(0);
