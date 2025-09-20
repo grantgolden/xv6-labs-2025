@@ -55,7 +55,6 @@ find(char *path, char *file_name, int argc, char *argv[])
         if ((st.type == T_DIR) && (strcmp(p, ".") != 0) && (strcmp(p, "..") != 0))
             find(buf, file_name, argc, argv);
         else if (strcmp(p, file_name) == 0) {
-            printf("%s\n", buf);
             if (!argv)
                 printf("%s\n", buf);
             else {
