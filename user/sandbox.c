@@ -28,7 +28,7 @@ main(int argc, char *argv[])
   }
 
   n += 1; // skip path
-    
+
   // strip off the first n arguments to sandbox
   for(i = n; i < argc && i < MAXARG; i++){
     nargv[i-n] = argv[i];
@@ -51,6 +51,6 @@ main(int argc, char *argv[])
   } else {
     wait(0);
   }
-  
+
   return 0;
 }
