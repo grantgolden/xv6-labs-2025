@@ -7,6 +7,8 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "fs.h"
+#include "stdint.h"
+
 
 /*
  * the kernel's page table.
@@ -38,7 +40,7 @@ kvmmake(void)
 
   // pci.c maps the e1000's registers here.
   kvmmap(kpgtbl, 0x40000000L, 0x40000000L, 0x20000, PTE_R | PTE_W);
-#endif  
+#endif
 
   // PLIC
   kvmmap(kpgtbl, PLIC, PLIC, 0x4000000, PTE_R | PTE_W);
@@ -55,7 +57,7 @@ kvmmake(void)
 
   // allocate and map a kernel stack for each process.
   proc_mapstacks(kpgtbl);
-  
+
   return kpgtbl;
 }
 
@@ -140,11 +142,78 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
-
+    //  uint64 child = PTE2PA(pte);
+    //  freewalk((pagetable_t)child);
+    //if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
 #if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
+void
+vmprint_head(pagetable_t pagetable) {
+  int count = 0;
+  for(int i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if (pte & PTE_V) {
+      pagetable_t sec_pg = (pagetable_t)(uintptr_t)PTE2PA(pte);
+      for (int j = 0; j < 512; j++) {
+        pte_t sec_pte = sec_pg[j];
+        if (sec_pte & PTE_V) {
+          pagetable_t th_pg = (pagetable_t)(uintptr_t)PTE2PA(sec_pte);
+          for (int k = 0; k < 512; k++) {
+            pte_t th_pte = th_pg[k];
+            if((th_pte & PTE_V) && (th_pte & (PTE_R|PTE_W|PTE_X)) != 0){
+              if (count < 10) {
+                uint64 va = i<<30|j<<21|k;
+                printf("va %lx pte 0x%lx pa 0x%lx perm 0x%lx\n", va, th_pte, PTE2PA(th_pte), PTE_FLAGS(th_pte));
+                count++;
+              }
+            }
+
+          } //for third pg
+
+        }
+      } //for sec pg
+    }
+  } //for first pg
+}
+
+void
+vmprint_tail(pagetable_t pagetable) {
+  pte_t pte_list[10];
+  uint64 vad_list[10];
+  int count = 0;
+  for(int i = 511; i >= 0; i--) {
+    pte_t pte = pagetable[i];
+    if (pte & PTE_V) {
+      pagetable_t sec_pg = (pagetable_t)(uintptr_t)PTE2PA(pte);
+      for (int j = 511; j >= 0; j--) {
+        pte_t sec_pte = sec_pg[j];
+        if (sec_pte & PTE_V) {
+          pagetable_t th_pg = (pagetable_t)(uintptr_t)PTE2PA(sec_pte);
+          for (int k = 511; k >= 0; k--) {
+            pte_t th_pte = th_pg[k];
+            if((th_pte & PTE_V) && (th_pte & (PTE_R|PTE_W|PTE_X)) != 0){
+              if (count < 10) {
+                uint64 va = i<<30|j<<21|k;
+                pte_list[count] = th_pte;
+                vad_list[count] = va;
+                count++;
+              }
+            }
+
+          } //for third pg
+
+        }
+      } //for sec pg
+    }
+  } //for first pg
+
+  for (int m = 9; m >= 0; m--)
+    printf("va 0x%lx pte 0x%lx pa 0x%lx perm 0x%lx\n", vad_list[m], pte_list[m], PTE2PA(pte_list[m]), PTE_FLAGS(pte_list[m]));
+}
 void
 vmprint(pagetable_t pagetable) {
   // your code here
+  vmprint_head(pagetable);
+  vmprint_tail(pagetable);
 }
 #endif
 
@@ -179,7 +248,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 
   if(size == 0)
     panic("mappages: size");
-  
+
   a = va;
   last = va + size - PGSIZE;
   for(;;){
@@ -365,7 +434,7 @@ void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
-  
+
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
@@ -402,7 +471,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     // forbid copyout over read-only user text pages.
     if((*pte & PTE_W) == 0)
       return -1;
-    
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
@@ -422,7 +491,7 @@ int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   uint64 n, va0, pa0;
-  
+
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
@@ -498,7 +567,7 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
 {
   uint64 mem;
   struct proc *p = myproc();
-  
+
 
   if (va >= p->sz)
     return 0;
