@@ -142,9 +142,6 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
-    //  uint64 child = PTE2PA(pte);
-    //  freewalk((pagetable_t)child);
-    //if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
 #if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
 void
 vmprint_head(pagetable_t pagetable) {
@@ -161,7 +158,7 @@ vmprint_head(pagetable_t pagetable) {
             pte_t th_pte = th_pg[k];
             if((th_pte & PTE_V) && (th_pte & (PTE_R|PTE_W|PTE_X)) != 0){
               if (count < 10) {
-                uint64 va = i<<30|j<<21|k;
+                uint64 va = i<<30|j<<21|k<<12;
                 printf("va %lx pte 0x%lx pa 0x%lx perm 0x%lx\n", va, th_pte, PTE2PA(th_pte), PTE_FLAGS(th_pte));
                 count++;
               }
@@ -192,7 +189,7 @@ vmprint_tail(pagetable_t pagetable) {
             pte_t th_pte = th_pg[k];
             if((th_pte & PTE_V) && (th_pte & (PTE_R|PTE_W|PTE_X)) != 0){
               if (count < 10) {
-                uint64 va = i<<30|j<<21|k;
+                uint64 va = i<<30|j<<21|k<<12;
                 pte_list[count] = th_pte;
                 vad_list[count] = va;
                 count++;
@@ -209,11 +206,39 @@ vmprint_tail(pagetable_t pagetable) {
   for (int m = 9; m >= 0; m--)
     printf("va 0x%lx pte 0x%lx pa 0x%lx perm 0x%lx\n", vad_list[m], pte_list[m], PTE2PA(pte_list[m]), PTE_FLAGS(pte_list[m]));
 }
+
 void
 vmprint(pagetable_t pagetable) {
   // your code here
+#if 0
   vmprint_head(pagetable);
   vmprint_tail(pagetable);
+#else
+  printf("page table %p\n", pagetable);
+  for(uint64 i = 0; i < 512; i++) {
+    pte_t pte = pagetable[i];
+    if (pte & PTE_V) {
+      printf("..%p: pte %p pa %p\n", (void*)(i<<30), (void*)pte, (void*)PTE2PA(pte));
+      pagetable_t sec_pg = (pagetable_t)(uintptr_t)PTE2PA(pte);
+      for (uint64 j = 0; j < 512; j++) {
+        pte_t sec_pte = sec_pg[j];
+        if (sec_pte & PTE_V) {
+          printf("....%p: pte %p pa %p\n", (void*)(i<<30|j<<21), (void*)sec_pte, (void*)PTE2PA(sec_pte));
+          pagetable_t th_pg = (pagetable_t)(uintptr_t)PTE2PA(sec_pte);
+          for (uint64 k = 0; k < 512; k++) {
+            pte_t th_pte = th_pg[k];
+            if((th_pte & PTE_V) && (th_pte & (PTE_R|PTE_W|PTE_X)) != 0){
+              uint64 va = i<<30|j<<21|k<<12;
+              printf("......%p: pte %p pa %p\n", (void*)va, (void*)th_pte, (void*)PTE2PA(th_pte));
+            }
+
+          } //for third pg
+
+        }
+      } //for sec pg
+    }
+  } //for first pg
+#endif
 }
 #endif
 
