@@ -1,0 +1,14 @@
+1> 0x0~0x2000 is pgtbltest text segment, permission bits are 0x5b, that is
+User, Read and Execution
+2> 0x2000~0x3000 is pgtbltest data segment, permission bits are 0x17, that is
+User, Read and Write
+3> 0x3000~0x4000 is guard page, permission bits are 0x7, that is Read
+and Write while User access is prohibited
+4> 0x4000~0x5000 is stack, permission bits are 0xD7, that is User, Read and Write
+
+5> 0x3FFFFFF000 is trampoline page, permission bits are 0x4B that is Read and
+Execution
+6> 0x3FFFFFE000 is trapframe page, permission bits are 0xC7 that is Read and
+Write
+7> 0x3FFFFFD000 is usyscall page, permission bits are 0x17 that is User, Read
+and Write

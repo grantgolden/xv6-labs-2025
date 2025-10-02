@@ -63,6 +63,14 @@ int statistics(void*, int);
 void fprintf(int, const char*, ...) __attribute__ ((format (printf, 2, 3)));
 void printf(const char*, ...) __attribute__ ((format (printf, 1, 2)));
 
+//#define DEBUG_ON
+
+#ifdef DEBUG_ON
+#define trace printf
+#else
+#define trace(fmt,...) do {} while (0);
+#endif
+
 // umalloc.c
 void* malloc(uint);
 void free(void*);

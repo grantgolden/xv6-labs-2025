@@ -99,6 +99,7 @@ supercheck(char *end)
 
   for (; a < s; a += PGSIZE) {
     pte_t pte = (pte_t) pgpte((void *) a);
+    //trace("a = %lx, pte: %lx, pa: %lx\n", a, pte, PTE2PA(pte));
     if (pte == 0) {
       err("no pte");
     }
@@ -131,10 +132,10 @@ void
 superpg_fork()
 {
   int pid;
-  
+
   printf("superpg_fork starting\n");
   testname = "superpg_fork";
-  
+
   char *end = sbrk(SZ);
   if (end == 0 || end == SBRK_ERROR)
     err("sbrk failed");
@@ -162,7 +163,7 @@ superpg_fork()
   } else if(pid == 0) {
     // reference freed memory; this should result in page fault and
     // the kernel should kill the child.
-    * (end + 1) = '9'; 
+    * (end + 1) = '9';
   } else {
     int status;
     wait(&status);
@@ -170,15 +171,15 @@ superpg_fork()
       err("child was able to reference free memory\n");
       exit(1);
     }
-  }  
-  printf("superpg_fork: OK\n");  
+  }
+  printf("superpg_fork: OK\n");
 }
 
 void
 superpg_free()
 {
   int pid;
-  
+
   printf("superpg_free starting\n");
   testname = "superpg_free";
 
@@ -194,10 +195,11 @@ superpg_free()
 
   pte_t pte1 = (pte_t) pgpte((void *) a-PGSIZE);
   pte_t pte2 = (pte_t) pgpte((void *) a-2*PGSIZE);
+
   if (pte1 != pte2) {
     err("not a super page");
   }
-  
+
   // write to the last 8192-byte section of a super page
   * (a - PGSIZE + 1) = '8';
   * (a - 2*PGSIZE + 1) = '9';
@@ -242,6 +244,6 @@ superpg_free()
       err("page hasn't been freed");
     }
   }
-  
-  printf("superpg_free: OK\n");  
+
+  printf("superpg_free: OK\n");
 }
