@@ -80,6 +80,7 @@ sys_pause(void)
     }
     sleep(&ticks, &tickslock);
   }
+  backtrace();
   release(&tickslock);
   return 0;
 }
@@ -104,4 +105,42 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+
+int
+sys_sigalarm(void)
+{
+  int interval;
+
+  uint64 func_va;
+
+  struct proc *p;
+
+  p = myproc();
+
+  argint(0, &interval);
+  argaddr(1, &func_va);
+
+  p->interval = interval;
+
+  p->ticks= 0;
+
+  p->func_va = func_va;
+
+  return 0;
+}
+
+int
+sys_sigreturn(void)
+{
+  struct proc *p;
+
+  p = myproc();
+
+  *(p->trapframe) = p->alarm_frame;
+
+  p->alarm_status = 0;
+
+  return p->alarm_frame.a0;
 }

@@ -140,6 +140,7 @@ panic(char *s)
   printf("panic: ");
   printf("%s\n", s);
   panicked = 1; // freeze uart output from other CPUs
+  backtrace();
   for(;;)
     ;
 }
@@ -148,4 +149,19 @@ void
 printfinit(void)
 {
   initlock(&pr.lock, "pr");
+}
+
+void backtrace(void)
+{
+  uint64 fp = r_fp();
+
+  uint64 stack_base = PGROUNDDOWN(fp);
+
+  printf("backtrace:\n");
+  while (fp >= stack_base) {
+    printf("%p\n", (void*)(*(uint64*)(fp-8)));
+    //last fp
+    fp = *(uint64*)(fp-16);
+  }
+
 }
