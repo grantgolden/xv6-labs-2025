@@ -203,9 +203,9 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
       continue;
     if((*pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
-    uint64 pa = PTE2PA(*pte);
-    decr_pg_refcnt((void*)pa);
+
     if(do_free){
+      uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
     *pte = 0;
@@ -232,7 +232,6 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
     }
     memset(mem, 0, PGSIZE);
     if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
-      decr_pg_refcnt(mem);
       kfree(mem);
       uvmdealloc(pagetable, a, oldsz);
       return 0;
@@ -276,7 +275,6 @@ freewalk(pagetable_t pagetable)
       panic("freewalk: leaf");
     }
   }
-  decr_pg_refcnt((void*)pagetable);
   kfree((void*)pagetable);
 }
 
@@ -320,7 +318,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if(mappages(new, i, PGSIZE, pa, flags) != 0)
       return -1;
     else
-      incr_pg_refcnt((void*)pa); //child map the same page, reference count adds 1
+      incr_pg_refcnt((void*)pa); //child map the same physical page, reference count increments
   }
 
   return 0;
@@ -479,13 +477,14 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
             printf("%s %d: out of memory\n", __FILE__, __LINE__);
             return 0;
           }
+          uint64 pa = PTE2PA(*pte);
           memset((void *) mem, 0, PGSIZE);
-          memmove((void *) mem, (void*)PTE2PA(*pte), PGSIZE);
+          memmove((void *) mem, (void*)pa, PGSIZE);
+          decr_pg_refcnt((void*)pa);
           uint flags = PTE_FLAGS(*pte)&~PTE_COW;
-          uvmunmap(pagetable, va, 1, 1);
+          uvmunmap(pagetable, va, 1, 0); //unmap but without kfree due to refcnt ! = 1
           //*pte = PA2PTE(mem)|flags;
           if (mappages(p->pagetable, va, PGSIZE, mem, flags|PTE_W) != 0) {
-            decr_pg_refcnt((void*)mem);
             kfree((void *)mem);
             printf("%s %d mapped faild\n", __FILE__, __LINE__);
             return 0;
@@ -517,7 +516,6 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
     memset((void *) mem, 0, PGSIZE);
     if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
       printf("%s %d: maped failed\n", __FILE__, __LINE__);
-      decr_pg_refcnt((void *)mem);
       kfree((void *)mem);
       return 0;
     }

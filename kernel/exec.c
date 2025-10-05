@@ -54,8 +54,6 @@ kexec(char *path, char **argv)
 
   if((pagetable = proc_pagetable(p)) == 0)
     goto bad;
-  else
-    incr_pg_refcnt(p->trapframe); //trapfram page is same as old pagetable, so the refcount is incremented
 
   // Load program into memory.
   for(i=0, off=elf.phoff; i<elf.phnum; i++, off+=sizeof(ph)){

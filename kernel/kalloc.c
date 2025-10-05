@@ -47,7 +47,7 @@ freerange(void *pa_start, void *pa_end)
 {
   char *p;
   for (int i = 0; i < sizeof(page_refcnt)/sizeof(page_refcnt[0]); i++)
-    page_refcnt[i] = 0;
+    page_refcnt[i] = 1; // for organizing all the physical pages
 
   p = (char*)PGROUNDUP((uint64)pa_start);
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
@@ -65,6 +65,8 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
+
+  decr_pg_refcnt(pa);
 
   if (get_pg_refcnt(pa)) //phsical page still refered
       return;

@@ -47,7 +47,7 @@ pipealloc(struct file **f0, struct file **f1)
 
  bad:
   if(pi) {
-    decr_pg_refcnt((char*)pi);
+    //decr_pg_refcnt((char*)pi);
     kfree((char*)pi);
   }
   if(*f0)
@@ -70,7 +70,7 @@ pipeclose(struct pipe *pi, int writable)
   }
   if(pi->readopen == 0 && pi->writeopen == 0){
     release(&pi->lock);
-    decr_pg_refcnt((void*)pi); //decrement refcnt, otherwise kfree failed due to refcount decreased only in uvmunmap
+    //decr_pg_refcnt((void*)pi); //decrement refcnt, otherwise kfree failed due to refcount decreased only in uvmunmap
     kfree((char*)pi);
   } else
     release(&pi->lock);

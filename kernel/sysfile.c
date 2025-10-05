@@ -464,7 +464,7 @@ sys_exec(void)
   int ret = kexec(path, argv);
 
   for(i = 0; i < NELEM(argv) && argv[i] != 0; i++) {
-    decr_pg_refcnt((void*)argv[i]);
+    //decr_pg_refcnt((void*)argv[i]);
     kfree(argv[i]);
   }
 
@@ -472,7 +472,7 @@ sys_exec(void)
 
  bad:
   for(i = 0; i < NELEM(argv) && argv[i] != 0; i++) {
-    decr_pg_refcnt((void*)argv[i]);
+    //decr_pg_refcnt((void*)argv[i]);
     kfree(argv[i]);
   }
   return -1;
