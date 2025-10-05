@@ -471,25 +471,32 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   if(pte && (*pte&PTE_V)) { //page mapped
     if (!read) { //store page fault
       if (*pte & PTE_COW) { //COW
-        mem = (uint64) kalloc();
-        if(mem == 0) {
-          //if out of memory, kill the process
-          setkilled(p);
-          printf("%s %d: out of memory\n", __FILE__, __LINE__);
-          return 0;
+        if (get_pg_refcnt((void*)PTE2PA(*pte)) != 1) {
+          mem = (uint64) kalloc();
+          if(mem == 0) {
+            //if out of memory, kill the process
+            setkilled(p);
+            printf("%s %d: out of memory\n", __FILE__, __LINE__);
+            return 0;
+          }
+          memset((void *) mem, 0, PGSIZE);
+          memmove((void *) mem, (void*)PTE2PA(*pte), PGSIZE);
+          uint flags = PTE_FLAGS(*pte)&~PTE_COW;
+          uvmunmap(pagetable, va, 1, 1);
+          //*pte = PA2PTE(mem)|flags;
+          if (mappages(p->pagetable, va, PGSIZE, mem, flags|PTE_W) != 0) {
+            decr_pg_refcnt((void*)mem);
+            kfree((void *)mem);
+            printf("%s %d mapped faild\n", __FILE__, __LINE__);
+            return 0;
+          }
+          return mem;
+        } else { //only current process refers the physical page, no copy is needed
+          uint64 p = *pte;
+          *pte = (p&~PTE_COW)|PTE_W;
+          return PTE2PA(p);
         }
-        memset((void *) mem, 0, PGSIZE);
-        memmove((void *) mem, (void*)PTE2PA(*pte), PGSIZE);
-        uint flags = PTE_FLAGS(*pte)&~PTE_COW;
-        uvmunmap(pagetable, va, 1, 1);
-        //*pte = PA2PTE(mem)|flags;
-        if (mappages(p->pagetable, va, PGSIZE, mem, flags|PTE_W) != 0) {
-          decr_pg_refcnt((void*)mem);
-          kfree((void *)mem);
-          printf("%s %d mapped faild\n", __FILE__, __LINE__);
-          return 0;
-        }
-        return mem;
+
       } else { //write to read-only page, kill it
         printf("%s %d: kill the process\n", __FILE__, __LINE__);
         setkilled(p);
