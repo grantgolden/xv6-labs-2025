@@ -47,7 +47,7 @@ kvmmake(void)
 
   // allocate and map a kernel stack for each process.
   proc_mapstacks(kpgtbl);
-  
+
   return kpgtbl;
 }
 
@@ -156,7 +156,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 
   if(size == 0)
     panic("mappages: size");
-  
+
   a = va;
   last = va + size - PGSIZE;
   for(;;){
@@ -200,11 +200,12 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0) // leaf page table entry allocated?
-      continue;   
+      continue;
     if((*pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
+    uint64 pa = PTE2PA(*pte);
+    decr_pg_refcnt((void*)pa);
     if(do_free){
-      uint64 pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
     *pte = 0;
@@ -231,6 +232,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
     }
     memset(mem, 0, PGSIZE);
     if(mappages(pagetable, a, PGSIZE, (uint64)mem, PTE_R|PTE_U|xperm) != 0){
+      decr_pg_refcnt(mem);
       kfree(mem);
       uvmdealloc(pagetable, a, oldsz);
       return 0;
@@ -274,6 +276,7 @@ freewalk(pagetable_t pagetable)
       panic("freewalk: leaf");
     }
   }
+  decr_pg_refcnt((void*)pagetable);
   kfree((void*)pagetable);
 }
 
@@ -299,7 +302,6 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -308,19 +310,20 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       continue;   // physical page hasn't been allocated
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
-    }
-  }
-  return 0;
 
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
+    if(*pte & PTE_W) {
+      flags &= ~PTE_W;
+      flags |= PTE_COW;
+      *pte = PA2PTE(pa) | flags;
+    }
+
+    if(mappages(new, i, PGSIZE, pa, flags) != 0)
+      return -1;
+    else
+      incr_pg_refcnt((void*)pa); //child map the same page, reference count adds 1
+  }
+
+  return 0;
 }
 
 // mark a PTE invalid for user access.
@@ -329,7 +332,7 @@ void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
-  
+
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
@@ -349,7 +352,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     va0 = PGROUNDDOWN(dstva);
     if(va0 >= MAXVA)
       return -1;
-  
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0) {
       if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
@@ -358,10 +361,13 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     }
 
     pte = walk(pagetable, va0, 0);
-    // forbid copyout over read-only user text pages.
-    if((*pte & PTE_W) == 0)
+    // forbid copyout over read-only user text pages. except COW page
+    if((*pte & PTE_W) == 0 && (*pte & PTE_COW) == 0)
       return -1;
-      
+
+    if (*pte & PTE_COW)
+      pa0 = vmfault(pagetable, va0, 0);
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
@@ -386,9 +392,9 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0) {
-      if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
+      //if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
         return -1;
-      }
+      //}
     }
     n = PGSIZE - (srcva - va0);
     if(n > len)
@@ -455,21 +461,62 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   uint64 mem;
   struct proc *p = myproc();
 
+  pte_t *pte;
+
   if (va >= p->sz)
     return 0;
+
   va = PGROUNDDOWN(va);
-  if(ismapped(pagetable, va)) {
-    return 0;
+  pte = walk(pagetable, va, 0);
+  if(pte && (*pte&PTE_V)) { //page mapped
+    if (!read) { //store page fault
+      if (*pte & PTE_COW) { //COW
+        mem = (uint64) kalloc();
+        if(mem == 0) {
+          //if out of memory, kill the process
+          setkilled(p);
+          printf("%s %d: out of memory\n", __FILE__, __LINE__);
+          return 0;
+        }
+        memset((void *) mem, 0, PGSIZE);
+        memmove((void *) mem, (void*)PTE2PA(*pte), PGSIZE);
+        uint flags = PTE_FLAGS(*pte)&~PTE_COW;
+        uvmunmap(pagetable, va, 1, 1);
+        //*pte = PA2PTE(mem)|flags;
+        if (mappages(p->pagetable, va, PGSIZE, mem, flags|PTE_W) != 0) {
+          decr_pg_refcnt((void*)mem);
+          kfree((void *)mem);
+          printf("%s %d mapped faild\n", __FILE__, __LINE__);
+          return 0;
+        }
+        return mem;
+      } else { //write to read-only page, kill it
+        printf("%s %d: kill the process\n", __FILE__, __LINE__);
+        setkilled(p);
+      }
+    } else {
+      printf("%s %d: no permission to read\n", __FILE__, __LINE__);
+      setkilled(p);
+      //panic("load page fault\n");
+    }
+  } else { //page unmapped. lazily allocated
+    trace("%s %d: lazily allocated\n", __FILE__, __LINE__);
+    mem = (uint64) kalloc();
+    if(mem == 0) {
+      setkilled(p);
+      printf("%s %d: out of memory\n", __FILE__, __LINE__);
+      return 0;
+    }
+    memset((void *) mem, 0, PGSIZE);
+    if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
+      printf("%s %d: maped failed\n", __FILE__, __LINE__);
+      decr_pg_refcnt((void *)mem);
+      kfree((void *)mem);
+      return 0;
+    }
+    return mem;
   }
-  mem = (uint64) kalloc();
-  if(mem == 0)
-    return 0;
-  memset((void *) mem, 0, PGSIZE);
-  if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
-    kfree((void *)mem);
-    return 0;
-  }
-  return mem;
+  return 0;
 }
 
 int

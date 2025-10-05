@@ -181,5 +181,17 @@ void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
 
+//kalloc.c
+void incr_pg_refcnt(void *pa);
+void decr_pg_refcnt(void *pa);
+int get_pg_refcnt(void *pa);
+
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+//#define DEBUG_ON
+#ifdef DEBUG_ON
+#define trace printf
+#else
+#define trace(fmt,...) do {} while (0);
+#endif

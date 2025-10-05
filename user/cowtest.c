@@ -16,7 +16,7 @@ simpletest()
   int sz = (phys_size / 3) * 2;
 
   printf("simple: ");
-  
+
   char *p = sbrk(sz);
   if(p == (char*)0xffffffffffffffffL){
     printf("sbrk(%d) failed\n", sz);
@@ -58,7 +58,7 @@ threetest()
   int pid1, pid2;
 
   printf("three: ");
-  
+
   char *p = sbrk(sz);
   if(p == (char*)0xffffffffffffffffL){
     printf("sbrk(%d) failed\n", sz);
@@ -128,9 +128,9 @@ void
 filetest()
 {
   enum { N = 4 };
-  
+
   printf("file: ");
-  
+
   buf[0] = 99;
 
   for(int i = 0; i < N; i++){
@@ -212,7 +212,7 @@ forkforktest()
   pause(5);
   for(int i = 0; i < sz; i += 4096){
     if(p[i] != 27){
-      printf("error: parent's memory was modified!\n");
+      printf("error: parent's memory was modified! i = %d\n", i);
       exit(1);
     }
   }
