@@ -9,6 +9,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "net.h"
+#include "stdint.h"
 
 // xv6's ethernet and IP addresses
 static uint8 local_mac[ETHADDR_LEN] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
@@ -19,10 +20,18 @@ static uint8 host_mac[ETHADDR_LEN] = { 0x52, 0x55, 0x0a, 0x00, 0x02, 0x02 };
 
 static struct spinlock netlock;
 
+static struct udp_bind_recv udp_recv;
+
+static int udp_recv_chan;           // &udp_recv_chan is the "wait channel"
+
 void
 netinit(void)
 {
   initlock(&netlock, "netlock");
+
+  memset(&udp_recv, 0, sizeof(struct udp_bind_recv));
+
+  udp_recv.size = UDP_QUEUE_SIZE + 1;
 }
 
 
@@ -37,8 +46,17 @@ sys_bind(void)
   //
   // Your code here.
   //
+  int dport;
+  argint(0, &dport);
 
-  return -1;
+  if (udp_recv.dport == dport) {
+    printf("port has been binded\n");
+    return -1;
+  }
+
+  udp_recv.dport = dport;
+
+  return 0;
 }
 
 //
@@ -77,6 +95,67 @@ sys_recv(void)
   //
   // Your code here.
   //
+  struct proc *p = myproc();
+
+  int dport;
+  uint64 src;
+  uint64 sport;
+  uint64 buf;
+  int maxlen;
+
+  argint(0, &dport);
+  argaddr(1, &src);
+  argaddr(2, &sport);
+  argaddr(3, &buf);
+  argint(4, &maxlen);
+
+
+  acquire(&netlock);
+  if (dport == udp_recv.dport) {
+    //wait queue not empty
+    while (udp_recv.tail == udp_recv.head) {
+        //udp queue is empty
+        sleep(&udp_recv_chan, &netlock);
+    }
+
+    char *buf = (char*)udp_recv.pinfo[udp_recv.head].buf;
+    int len = udp_recv.pinfo[udp_recv.head].length;
+
+    udp_recv.head = (udp_recv.head+1)%udp_recv.size;
+
+    release(&netlock);
+
+    //copy src ip addr
+    struct ip *ip = (struct ip *)(buf + sizeof(struct eth));
+    if (copyout(p->pagetable, (uint64)src, (char*)(uintptr_t)ntohl(ip->ip_src), sizeof(ip->ip_src)) < 0) {
+      kfree(buf);
+      printf("recv: copyout udp src ip failed\n");
+      return -1;
+    }
+
+    //copy src port
+    struct udp *udp = (struct udp *)(ip + 1);
+
+    if (copyout(p->pagetable, (uint64)sport, (void*)(uintptr_t)ntohs(udp->sport), sizeof(udp->sport)) < 0) {
+      kfree(buf);
+      printf("recv: copyout udp sport failed\n");
+      return -1;
+    }
+
+    unsigned paysize = ntohs(udp->ulen) - sizeof(struct udp);
+    len = maxlen > paysize ?  paysize : maxlen;
+
+    //copy udp payload to user buf
+    if (copyout(p->pagetable, (uint64)buf, (char*)(udp+1), len) < 0) {
+      kfree(buf);
+      printf("recv: copyout of udp payload failed\n");
+      return -1;
+    }
+
+    kfree(buf);
+    return len;
+  }
+  release(&netlock);
   return -1;
 }
 
@@ -191,7 +270,27 @@ ip_rx(char *buf, int len)
   //
   // Your code here.
   //
-  
+  struct ip *ip = (struct ip*)(buf + sizeof(struct eth));
+
+  if (ip->ip_p == IPPROTO_UDP) {
+    struct udp *udp = (struct udp *)(ip + 1);
+    acquire(&netlock);
+    if (ntohs(udp->dport) == udp_recv.dport) {
+      //both udp and dport match, and queues not full
+      if (((udp_recv.tail+1)%udp_recv.size) != udp_recv.head) {
+        udp_recv.pinfo[udp_recv.tail].buf = buf;
+        udp_recv.pinfo[udp_recv.tail].length= len;
+        udp_recv.tail = (udp_recv.tail+1)%udp_recv.size;
+        wakeup(&udp_recv_chan);
+        release(&netlock);
+        return;
+      } else {
+        printf("udp queue full, discarded!\n");
+      }
+    }
+    release(&netlock);
+  }
+  kfree(buf);
 }
 
 //
@@ -219,7 +318,7 @@ arp_rx(char *inbuf)
   char *buf = kalloc();
   if(buf == 0)
     panic("send_arp_reply");
-  
+
   struct eth *eth = (struct eth *) buf;
   memmove(eth->dhost, ineth->shost, ETHADDR_LEN); // ethernet destination = query source
   memmove(eth->shost, local_mac, ETHADDR_LEN); // ethernet source = xv6's ethernet address

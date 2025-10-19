@@ -6,6 +6,11 @@
 #include "proc.h"
 #include "defs.h"
 #include "e1000_dev.h"
+#include "stdint.h"
+
+#define REG32(reg) ((volatile unsigned int*)(reg))
+#define R32(reg) (*(REG32(reg)))
+#define W32(reg, v) (*(REG32(reg)) = (v))
 
 #define TX_RING_SIZE 16
 static struct tx_desc tx_ring[TX_RING_SIZE] __attribute__((aligned(16)));
@@ -49,7 +54,7 @@ e1000_init(uint32 *xregs)
     panic("e1000");
   regs[E1000_TDLEN] = sizeof(tx_ring);
   regs[E1000_TDH] = regs[E1000_TDT] = 0;
-  
+
   // [E1000 14.4] Receive initialization
   memset(rx_ring, 0, sizeof(rx_ring));
   for (i = 0; i < RX_RING_SIZE; i++) {
@@ -83,7 +88,7 @@ e1000_init(uint32 *xregs)
     E1000_RCTL_BAM |                 // enable broadcast
     E1000_RCTL_SZ_2048 |             // 2048-byte rx buffers
     E1000_RCTL_SECRC;                // strip CRC
-  
+
   // ask e1000 for receive interrupts.
   regs[E1000_RDTR] = 0; // interrupt after every received packet (no timer)
   regs[E1000_RADV] = 0; // interrupt after every packet (no timer)
@@ -104,8 +109,24 @@ e1000_transmit(char *buf, int len)
   // return -1 on failure (e.g., there is no descriptor available)
   // so that the caller knows to free buf.
   //
+  //printf("%s %d: Transmit started\n", __FILE__, __LINE__);
+  acquire(&e1000_lock);
+  unsigned tx_desc_index = regs[E1000_TDT];
 
-  
+  struct tx_desc *ptx = tx_ring+tx_desc_index;
+
+  if (!(ptx->status&0x1)) {
+    printf("no free descp available\n");
+    return -1;
+  } else {
+    ptx->addr = (uint64)(uintptr_t)buf;
+    ptx->length = len;
+    ptx->cmd = (E1000_TXD_CMD_RS|E1000_TXD_CMD_EOP); //rs = 1 , eop = 1
+    ptx->status = 0;
+    regs[E1000_TDT] = (tx_desc_index+1)%TX_RING_SIZE;
+  }
+  release(&e1000_lock);
+
   return 0;
 }
 
@@ -118,7 +139,27 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver a buf for each packet (using net_rx()).
   //
+  //printf("%s %d recv started\n", __FILE__, __LINE__);
+  unsigned rx_desc_index = (regs[E1000_RDT]+1)%RX_RING_SIZE;
 
+  struct rx_desc *prx = &rx_ring[rx_desc_index];
+
+  if (!(prx->status&0x1)) {
+    //printf("no new packet arrived\n");
+    return;
+  } else {
+    do {
+      net_rx((void*)(uintptr_t)prx->addr, prx->length);
+      rx_ring[rx_desc_index].addr = (uint64) kalloc();
+      if (!rx_ring[rx_desc_index].addr)
+        panic("e1000_rcv");
+      prx->status = 0;
+      regs[E1000_RDT] = rx_desc_index;
+      rx_desc_index += 1;
+      rx_desc_index %= RX_RING_SIZE;
+      prx = &rx_ring[rx_desc_index];
+    } while (prx->status);
+  }
 }
 
 void

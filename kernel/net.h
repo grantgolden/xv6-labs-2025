@@ -1,6 +1,7 @@
 //
 // endianness support
 //
+#define UDP_QUEUE_SIZE 16
 
 static inline uint16 bswaps(uint16 val)
 {
@@ -97,14 +98,14 @@ struct dns {
   uint8 rd: 1;  // recursion desired
   uint8 tc: 1;  // truncated
   uint8 aa: 1;  // authoritive
-  uint8 opcode: 4; 
+  uint8 opcode: 4;
   uint8 qr: 1;  // query/response
   uint8 rcode: 4; // response code
   uint8 cd: 1;  // checking disabled
   uint8 ad: 1;  // authenticated data
-  uint8 z:  1;  
+  uint8 z:  1;
   uint8 ra: 1;  // recursion available
-  
+
   uint16 qdcount; // number of question entries
   uint16 ancount; // number of resource records in answer section
   uint16 nscount; // number of NS resource records in authority section
@@ -115,7 +116,7 @@ struct dns_question {
   uint16 qtype;
   uint16 qclass;
 } __attribute__((packed));
-  
+
 #define ARECORD (0x0001)
 #define QCLASS  (0x0001)
 
@@ -125,3 +126,18 @@ struct dns_data {
   uint32 ttl;
   uint16 len;
 } __attribute__((packed));
+
+struct packet_info {
+  void *buf;
+  int length;
+};
+
+struct udp_bind_recv {
+  unsigned dport;
+  struct packet_info pinfo[UDP_QUEUE_SIZE+1];
+  int head;
+  int tail;
+  int size;
+};
+
+
