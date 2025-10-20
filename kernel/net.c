@@ -29,9 +29,6 @@ netinit(void)
 {
   initlock(&netlock, "netlock");
 
-  memset(&udp_recv, 0, sizeof(struct udp_bind_recv));
-
-  udp_recv.size = UDP_QUEUE_SIZE + 1;
 }
 
 
@@ -53,6 +50,9 @@ sys_bind(void)
     printf("port has been binded\n");
     return -1;
   }
+
+  memset(&udp_recv, 0, sizeof(struct udp_bind_recv));
+  udp_recv.size = UDP_QUEUE_SIZE + 1;
 
   udp_recv.dport = dport;
 
@@ -125,9 +125,12 @@ sys_recv(void)
 
     release(&netlock);
 
+    printf("udp packet available\n");
+
     //copy src ip addr
     struct ip *ip = (struct ip *)(buf + sizeof(struct eth));
-    if (copyout(p->pagetable, (uint64)src, (char*)(uintptr_t)ntohl(ip->ip_src), sizeof(ip->ip_src)) < 0) {
+    uint32 ip_src = ntohl(ip->ip_src);
+    if (copyout(p->pagetable, (uint64)src, (char*)(uintptr_t)(&ip_src), sizeof(ip->ip_src)) < 0) {
       kfree(buf);
       printf("recv: copyout udp src ip failed\n");
       return -1;
@@ -136,7 +139,8 @@ sys_recv(void)
     //copy src port
     struct udp *udp = (struct udp *)(ip + 1);
 
-    if (copyout(p->pagetable, (uint64)sport, (void*)(uintptr_t)ntohs(udp->sport), sizeof(udp->sport)) < 0) {
+    uint16 sport = ntohs(udp->sport);
+    if (copyout(p->pagetable, (uint64)sport, (void*)(uintptr_t)(&sport), sizeof(udp->sport)) < 0) {
       kfree(buf);
       printf("recv: copyout udp sport failed\n");
       return -1;
@@ -273,16 +277,18 @@ ip_rx(char *buf, int len)
   struct ip *ip = (struct ip*)(buf + sizeof(struct eth));
 
   if (ip->ip_p == IPPROTO_UDP) {
+    printf("udp received\n");
     struct udp *udp = (struct udp *)(ip + 1);
     acquire(&netlock);
     if (ntohs(udp->dport) == udp_recv.dport) {
-      //both udp and dport match, and queues not full
+      //both udp and dport match, and queues not full, packet enqueue
       if (((udp_recv.tail+1)%udp_recv.size) != udp_recv.head) {
         udp_recv.pinfo[udp_recv.tail].buf = buf;
         udp_recv.pinfo[udp_recv.tail].length= len;
         udp_recv.tail = (udp_recv.tail+1)%udp_recv.size;
         wakeup(&udp_recv_chan);
         release(&netlock);
+        printf("udp packet enqueue\n");
         return;
       } else {
         printf("udp queue full, discarded!\n");
