@@ -137,7 +137,7 @@ struct udp_bind_recv {
   struct packet_info pinfo[UDP_QUEUE_SIZE+1];
   int head;
   int tail;
-  int size;
+  int used;
 };
 
 

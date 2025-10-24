@@ -20,7 +20,7 @@ static uint8 host_mac[ETHADDR_LEN] = { 0x52, 0x55, 0x0a, 0x00, 0x02, 0x02 };
 
 static struct spinlock netlock;
 
-static struct udp_bind_recv udp_recv;
+static struct udp_bind_recv udp_recv[16];
 
 static int udp_recv_chan;           // &udp_recv_chan is the "wait channel"
 
@@ -28,7 +28,7 @@ void
 netinit(void)
 {
   initlock(&netlock, "netlock");
-
+  memset(udp_recv, 0, sizeof(udp_recv));
 }
 
 
@@ -46,15 +46,29 @@ sys_bind(void)
   int dport;
   argint(0, &dport);
 
-  if (udp_recv.dport == dport) {
-    printf("port has been binded\n");
-    return -1;
+  int i;
+  int udp_port_num = sizeof(udp_recv)/sizeof(udp_recv[0]);
+  int first_unused = -1;
+  for (i = 0; i < udp_port_num; i++) {
+      if (udp_recv[i].used && (udp_recv[i].dport == dport)) {
+          printf("udp port %d has already binded\n", dport);
+          return -1;
+      }
+
+      if (!udp_recv[i].used && (first_unused == -1)) {
+          first_unused = i;
+      }
   }
 
-  memset(&udp_recv, 0, sizeof(struct udp_bind_recv));
-  udp_recv.size = UDP_QUEUE_SIZE + 1;
+  if (first_unused == -1) {
+      printf("no aviable port for binding\n");
+      return -1;
+  }
 
-  udp_recv.dport = dport;
+  memset(&udp_recv[i], 0, sizeof(struct udp_bind_recv));
+
+  udp_recv[i].dport = dport;
+  udp_recv[i].used = 1;
 
   return 0;
 }
@@ -100,15 +114,14 @@ sys_recv(void)
   int dport;
   uint64 src;
   uint64 sport;
-  uint64 buf;
+  uint64 user_buf;
   int maxlen;
 
   argint(0, &dport);
   argaddr(1, &src);
   argaddr(2, &sport);
-  argaddr(3, &buf);
+  argaddr(3, &user_buf);
   argint(4, &maxlen);
-
 
   acquire(&netlock);
   if (dport == udp_recv.dport) {
@@ -130,7 +143,8 @@ sys_recv(void)
     //copy src ip addr
     struct ip *ip = (struct ip *)(buf + sizeof(struct eth));
     uint32 ip_src = ntohl(ip->ip_src);
-    if (copyout(p->pagetable, (uint64)src, (char*)(uintptr_t)(&ip_src), sizeof(ip->ip_src)) < 0) {
+
+    if (copyout(p->pagetable, src, (char*)(uintptr_t)(&ip_src), sizeof(ip->ip_src)) < 0) {
       kfree(buf);
       printf("recv: copyout udp src ip failed\n");
       return -1;
@@ -139,8 +153,8 @@ sys_recv(void)
     //copy src port
     struct udp *udp = (struct udp *)(ip + 1);
 
-    uint16 sport = ntohs(udp->sport);
-    if (copyout(p->pagetable, (uint64)sport, (void*)(uintptr_t)(&sport), sizeof(udp->sport)) < 0) {
+    uint16 udp_sport = ntohs(udp->sport);
+    if (copyout(p->pagetable, sport, (char*)(uintptr_t)(&udp_sport), sizeof(udp->sport)) < 0) {
       kfree(buf);
       printf("recv: copyout udp sport failed\n");
       return -1;
@@ -150,9 +164,9 @@ sys_recv(void)
     len = maxlen > paysize ?  paysize : maxlen;
 
     //copy udp payload to user buf
-    if (copyout(p->pagetable, (uint64)buf, (char*)(udp+1), len) < 0) {
+    if (copyout(p->pagetable, user_buf, (char*)(udp+1), len) < 0) {
       kfree(buf);
-      printf("recv: copyout of udp payload failed\n");
+      printf("recv: copyout udp payload failed, len = %x\n", len);
       return -1;
     }
 
@@ -279,20 +293,31 @@ ip_rx(char *buf, int len)
   if (ip->ip_p == IPPROTO_UDP) {
     printf("udp received\n");
     struct udp *udp = (struct udp *)(ip + 1);
+    unsigned dport = ntohs(udp->dport);
+    int i;
     acquire(&netlock);
-    if (ntohs(udp->dport) == udp_recv.dport) {
-      //both udp and dport match, and queues not full, packet enqueue
-      if (((udp_recv.tail+1)%udp_recv.size) != udp_recv.head) {
-        udp_recv.pinfo[udp_recv.tail].buf = buf;
-        udp_recv.pinfo[udp_recv.tail].length= len;
-        udp_recv.tail = (udp_recv.tail+1)%udp_recv.size;
+    for (i = 0; i < sizeof(udp_recv)/sizeof(udp_recv[0]); i++) {
+        if (udp_recv[i].used && udp_recv[i].dport == dport)
+            break;
+    }
+
+    if (i == sizeof(udp_recv)/sizeof(udp_recv[0])) {
+        release(&netlock);
+        kfree(buf);
+        return;
+    }
+
+    //both udp and dport match, and queues not full, packet enqueue
+    if (((udp_recv[i].tail+1)%(UDP_QUEUE_SIZE+1)) != udp_recv[i].head) {
+        udp_recv[i].pinfo[udp_recv[i].tail].buf = buf;
+        udp_recv[i].pinfo[udp_recv[i].tail].length= len;
+        udp_recv[i].tail = (udp_recv[i].tail+1)%(UDP_QUEUE_SIZE+1);
         wakeup(&udp_recv_chan);
         release(&netlock);
         printf("udp packet enqueue\n");
         return;
-      } else {
+    } else {
         printf("udp queue full, discarded!\n");
-      }
     }
     release(&netlock);
   }
