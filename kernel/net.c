@@ -87,8 +87,22 @@ sys_unbind(void)
   //
   // Optional: Your code here.
   //
+  int dport;
+  argint(0, &dport);
+  acquire(&netlock);
+  int i;
+  for (i = 0; i < sizeof(udp_recv)/sizeof(udp_recv[0]); i++) {
+      if (udp_recv[i].used && (udp_recv[i].dport == dport)) {
+          udp_recv[i].used = 0;
+          release(&netlock);
+          return 0;
+      }
+  }
 
-  return 0;
+  release(&netlock);
+  printf("port %d is not binded\n", dport);
+
+  return -1;
 }
 
 //
