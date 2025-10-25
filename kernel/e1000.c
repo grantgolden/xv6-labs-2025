@@ -66,6 +66,8 @@ e1000_init(uint32 *xregs)
   if(sizeof(rx_ring) % 128 != 0)
     panic("e1000");
   regs[E1000_RDH] = 0;
+  //initally, whole descriptors in rx ring owned by hardware, RDT + 1 will always
+  //be next hardware dma use first
   regs[E1000_RDT] = RX_RING_SIZE - 1;
   regs[E1000_RDLEN] = sizeof(rx_ring);
 
@@ -119,6 +121,9 @@ e1000_transmit(char *buf, int len)
     printf("no free descp available\n");
     return -1;
   } else {
+    //free current buf in tx_desc if used
+    if (ptx->addr)
+      kfree((void*)(uintptr_t)ptx->addr);
     ptx->addr = (uint64)(uintptr_t)buf;
     ptx->length = len;
     ptx->cmd = (E1000_TXD_CMD_RS|E1000_TXD_CMD_EOP); //rs = 1 , eop = 1
@@ -144,22 +149,17 @@ e1000_recv(void)
 
   struct rx_desc *prx = &rx_ring[rx_desc_index];
 
-  if (!(prx->status&0x1)) {
-    //printf("no new packet arrived\n");
-    return;
-  } else {
-    do {
-      net_rx((void*)(uintptr_t)prx->addr, prx->length);
-      rx_ring[rx_desc_index].addr = (uint64) kalloc();
-      if (!rx_ring[rx_desc_index].addr)
-        panic("e1000_rcv");
-      prx->status = 0;
-      regs[E1000_RDT] = rx_desc_index;
-      rx_desc_index += 1;
-      rx_desc_index %= RX_RING_SIZE;
-      prx = &rx_ring[rx_desc_index];
-    } while (prx->status);
-  }
+  while (prx->status&0x1) {
+    net_rx((void*)(uintptr_t)prx->addr, prx->length);
+    rx_ring[rx_desc_index].addr = (uint64) kalloc();
+    if (!rx_ring[rx_desc_index].addr)
+      panic("e1000_rcv");
+    prx->status = 0;
+    regs[E1000_RDT] = rx_desc_index;
+    rx_desc_index += 1;
+    rx_desc_index %= RX_RING_SIZE;
+    prx = &rx_ring[rx_desc_index];
+  } while (prx->status&0x1);
 }
 
 void
