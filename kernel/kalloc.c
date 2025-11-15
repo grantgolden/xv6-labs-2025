@@ -22,7 +22,6 @@ struct run {
 struct kallocator{
   struct spinlock lock;
   struct run *freelist;
-  int page_cnt;
 };
 
 //struct kallocator kmem;
@@ -36,11 +35,11 @@ void
 kinit()
 {
   memset(kmems, 0, sizeof(kmems));
-
-  for (int i = 0; i < sizeof(kmems)/sizeof(kmems[0]); i++)
-    initlock(&kmems[i].lock, lk_name[i]);
-
   freerange(end, (void*)PHYSTOP);
+
+  for (int i = 0; i < sizeof(kmems)/sizeof(kmems[0]); i++) {
+    initlock(&kmems[i].lock, lk_name[i]);
+  }
 }
 
 void
@@ -72,13 +71,12 @@ kfree(void *pa)
 
   push_off();
   kmem = &kmems[cpuid()];
-  pop_off();
 
   acquire(&kmem->lock);
   r->next = kmem->freelist;
   kmem->freelist = r;
-  kmem->page_cnt++;
   release(&kmem->lock);
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -94,82 +92,55 @@ kalloc(void)
   push_off();
   id = cpuid();
   kmem = &kmems[id];
-  pop_off();
 
   acquire(&kmem->lock);
   r = kmem->freelist;
-  if(r) {
+
+  if (r) {
     kmem->freelist = r->next;
-    kmem->page_cnt--;
     release(&kmem->lock);
-  } else { //current freelist is empty
+  } else { //current freelist is empty, stealing from other cpus
     release(&kmem->lock);
-    int free_cnt_max = -1;
-    int steal_cpu = 0;
+
+    int steal_left = 64;
+
+    struct run *r_steal = 0;
+
     for (int i = 0; i < sizeof(kmems)/sizeof(kmems[0]); i++) {
+
       if (i == id)
         continue;
-      acquire(&kmems[i].lock);
-      if (kmems[i].page_cnt > free_cnt_max) {
-        free_cnt_max = kmems[i].page_cnt;
-        steal_cpu = i;
+
+      struct kallocator *steal_kmem = &kmems[i];
+
+      acquire(&steal_kmem->lock);
+
+      struct run *rt = steal_kmem->freelist;
+      while (rt && steal_left) {
+        steal_kmem->freelist = rt->next;
+        rt->next = r_steal;
+        r_steal = rt;
+        rt = steal_kmem->freelist;
+        steal_left--;
       }
-      release(&kmems[i].lock);
-    }
+      release(&steal_kmem->lock);
 
-    //steal pages from cpu with has most free pages
-    struct kallocator *steal_kmem = &kmems[steal_cpu];
-    acquire(&steal_kmem->lock);
-
-    struct run *r_s = steal_kmem->freelist;
-    struct run *r_temp = 0;
-
-    for (int i = 0; i < free_cnt_max/2; i++) {
-      r_temp = steal_kmem->freelist;
-      if (r_temp) {
-        steal_kmem->freelist = r_temp->next;
-        steal_kmem->page_cnt--;
-      } else
+      if (!steal_left)
         break;
     }
 
-    if (r_temp)
-      r_temp->next = 0;
-
-    release(&steal_kmem->lock);
-
     acquire(&kmem->lock);
-    while (r_s) {
-      r_temp = r_s->next;
-      r_s->next = kmem->freelist;
-      kmem->freelist = r_s;
-      kmem->page_cnt++;
-      r_s = r_temp;
-    }
-
+    kmem->freelist = r_steal;
     r = kmem->freelist;
 
     if (r) {
       kmem->freelist = r->next;
-      kmem->page_cnt--;
     }
     release(&kmem->lock);
-    //  if (id == i)
-    //    continue;
-    //  //get the cpu which has most free pages
-    //  kmem = &kmems[i];
-    //  acquire(&kmem->lock);
-    //  r = kmem->freelist;
-    //  if (r) { //get free page
-    //    kmem->freelist = r->next;
-    //    release(&kmem->lock);
-    //    break;
-    //  }
-    //  release(&kmem->lock);
-    //}
+
   }
 
-
+  pop_off();
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
