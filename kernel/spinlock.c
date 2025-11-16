@@ -53,7 +53,7 @@ initlock(struct spinlock *lk, char *name)
   lk->nts = 0;
   lk->n = 0;
   findslot(lk);
-#endif  
+#endif
 }
 
 // Acquire the lock.
@@ -67,7 +67,7 @@ acquire(struct spinlock *lk)
 
 #ifdef LAB_LOCK
     __sync_fetch_and_add(&(lk->n), 1);
-#endif      
+#endif
 
   // On RISC-V, sync_lock_test_and_set turns into an atomic swap:
   //   a5 = 1
@@ -125,27 +125,46 @@ static void
 read_acquire_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  acquire(&rwlk->l);
+  while (__atomic_load_n(&rwlk->writer, __ATOMIC_SEQ_CST) > 0) {
+
+  }
+
+
+  //acquire(&rwlk->r);
+  __atomic_fetch_add(&rwlk->reader, 1, __ATOMIC_SEQ_CST);
+
+  //release(&rwlk->r);
+  release(&rwlk->l);
 }
 
 static void
 read_release_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  release(&rwlk->l);
+  //acquire(&rwlk->r);
+  __atomic_fetch_sub(&rwlk->reader, 1, __ATOMIC_SEQ_CST);
+  //release(&rwlk->r);
 }
 
 static void
 write_acquire_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
+  //waiter list for write acquire
+  __atomic_fetch_add(&rwlk->writer, 1, __ATOMIC_SEQ_CST);
+  __sync_synchronize();
   acquire(&rwlk->l);
+  __sync_synchronize();
+  while (__atomic_load_n(&rwlk->reader, __ATOMIC_SEQ_CST) > 0) {
+  }
 }
 
 static void
 write_release_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
+  __atomic_fetch_sub(&rwlk->writer, 1, __ATOMIC_SEQ_CST);
+  __sync_synchronize();
   release(&rwlk->l);
 }
 
@@ -182,6 +201,8 @@ initrwlock(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
   initlock(&rwlk->l, "rwlk");
+  rwlk->reader = 0;
+  rwlk->writer = 0;
 }
 
 // Test rwspinlock implementation.
@@ -490,7 +511,7 @@ statslock(char *buf, int sz) {
       n += snprint_lock(buf +n, sz-n, locks[i]);
     }
   }
-  
+
   n += snprintf(buf+n, sz-n, "--- top 5 contended locks:\n");
   int last = 100000000;
   // stupid way to compute top 5 contended locks
@@ -507,7 +528,7 @@ statslock(char *buf, int sz) {
     last = locks[top]->nts;
   }
   n += snprintf(buf+n, sz-n, "tot= %d\n", tot);
-  release(&lock_locks);  
+  release(&lock_locks);
   return n;
 }
 #endif
