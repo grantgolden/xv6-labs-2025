@@ -22,6 +22,8 @@ struct run {
 struct kallocator{
   struct spinlock lock;
   struct run *freelist;
+  int page_free;
+  int page_used;
 };
 
 //struct kallocator kmem;
@@ -35,10 +37,12 @@ void
 kinit()
 {
   memset(kmems, 0, sizeof(kmems));
+
   freerange(end, (void*)PHYSTOP);
 
   for (int i = 0; i < sizeof(kmems)/sizeof(kmems[0]); i++) {
     initlock(&kmems[i].lock, lk_name[i]);
+    kmems[i].page_used = 0;
   }
 }
 
@@ -75,6 +79,8 @@ kfree(void *pa)
   acquire(&kmem->lock);
   r->next = kmem->freelist;
   kmem->freelist = r;
+  kmem->page_used--;
+  kmem->page_free++;
   release(&kmem->lock);
   pop_off();
 }
@@ -98,45 +104,109 @@ kalloc(void)
 
   if (r) {
     kmem->freelist = r->next;
+    kmem->page_used++;
+    kmem->page_free--;
     release(&kmem->lock);
   } else { //current freelist is empty, stealing from other cpus
+    int page_used = kmem->page_used;
+
     release(&kmem->lock);
 
-    int steal_left = 64;
+    int steal_left = 16;
+    int steal_num = 0;
+
+    if (page_used > 0)
+      steal_left = page_used;
 
     struct run *r_steal = 0;
 
-    for (int i = 0; i < sizeof(kmems)/sizeof(kmems[0]); i++) {
 
+    int page_free_max = -1;
+    int core = 0;
+
+
+    //get start core with max free pages
+    for (int i = 0; i < NCPU; i++) {
       if (i == id)
         continue;
+      if (kmems[i].page_free > page_free_max) {
+        page_free_max = kmems[i].page_free;
+        core = i;
+      }
+    }
 
-      struct kallocator *steal_kmem = &kmems[i];
+
+    for (int i = 0; i < NCPU; i++) {
+
+      core = core%NCPU;
+
+      if (core == id) {
+        core++;
+        continue;
+      }
+
+
+      struct kallocator *steal_kmem = &kmems[core];
+
+      core++;
 
       acquire(&steal_kmem->lock);
 
-      struct run *rt = steal_kmem->freelist;
-      while (rt && steal_left) {
-        steal_kmem->freelist = rt->next;
-        rt->next = r_steal;
-        r_steal = rt;
-        rt = steal_kmem->freelist;
-        steal_left--;
+      if (!steal_kmem->page_free) {
+        release(&steal_kmem->lock);
+        continue;
       }
+
+      int steal_max = steal_kmem->page_free/2;
+
+      if (steal_max == 0)
+        steal_max = 1;
+
+
+      if (steal_max > steal_left)
+        steal_max = steal_left;
+
+      steal_left -= steal_max;
+
+      steal_kmem->page_free -= steal_max;
+
+      steal_num += steal_max;
+
+      struct run *rt = steal_kmem->freelist;
+      struct run *rp = 0;
+
+      while (steal_max) {
+        rp = rt;
+        rt = rt->next;
+        steal_max--;
+      }
+
+      if (rp) {
+        rp->next = r_steal;
+        r_steal = steal_kmem->freelist;
+        steal_kmem->freelist = rt;
+      }
+
       release(&steal_kmem->lock);
 
-      if (!steal_left)
+      //if (!r_steal)
+      if (steal_left <= 0)
         break;
     }
 
-    acquire(&kmem->lock);
-    kmem->freelist = r_steal;
-    r = kmem->freelist;
 
-    if (r) {
-      kmem->freelist = r->next;
+    if (r_steal) {
+      r = r_steal;
+
+      //acquire(&kmem->lock);
+      kmem->freelist = r_steal->next;
+      kmem->page_used++;
+
+      //must set last
+      kmem->page_free = steal_num - 1;
+
     }
-    release(&kmem->lock);
+
 
   }
 
