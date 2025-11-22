@@ -125,16 +125,17 @@ static void
 read_acquire_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  while (__atomic_load_n(&rwlk->writer, __ATOMIC_SEQ_CST) > 0) {
-
+  while(__atomic_load_n(&rwlk->writer, __ATOMIC_SEQ_CST) || __sync_lock_test_and_set(&rwlk->l.locked, 1)) {
+      ;
   }
 
+  __sync_synchronize();
 
-  //acquire(&rwlk->r);
   __atomic_fetch_add(&rwlk->reader, 1, __ATOMIC_SEQ_CST);
 
-  //release(&rwlk->r);
-  release(&rwlk->l);
+  __sync_synchronize();
+
+  __sync_lock_release(&rwlk->l.locked);
 }
 
 static void
