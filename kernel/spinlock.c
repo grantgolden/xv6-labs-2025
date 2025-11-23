@@ -125,26 +125,27 @@ static void
 read_acquire_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  while(__atomic_load_n(&rwlk->writer, __ATOMIC_SEQ_CST) || __sync_lock_test_and_set(&rwlk->l.locked, 1)) {
-      ;
+  while (1) {
+    //speculatively take rd lock
+    __atomic_fetch_add(&rwlk->reader, 1, __ATOMIC_SEQ_CST);
+
+    if (!__atomic_load_n(&rwlk->writer, __ATOMIC_SEQ_CST) && !__atomic_load_n(&rwlk->locked, __ATOMIC_SEQ_CST))
+      return;
+
+    //failure, undo and wait untill we can try again
+    __atomic_fetch_sub(&rwlk->reader, 1, __ATOMIC_SEQ_CST);
+
+    while (__atomic_load_n(&rwlk->writer, __ATOMIC_SEQ_CST) || __atomic_load_n(&rwlk->locked, __ATOMIC_SEQ_CST)) {
+      //spin
+    }
   }
-
-  __sync_synchronize();
-
-  __atomic_fetch_add(&rwlk->reader, 1, __ATOMIC_SEQ_CST);
-
-  __sync_synchronize();
-
-  __sync_lock_release(&rwlk->l.locked);
 }
 
 static void
 read_release_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  //acquire(&rwlk->r);
   __atomic_fetch_sub(&rwlk->reader, 1, __ATOMIC_SEQ_CST);
-  //release(&rwlk->r);
 }
 
 static void
@@ -153,10 +154,15 @@ write_acquire_inner(struct rwspinlock *rwlk)
   // Replace this with your implementation.
   //waiter list for write acquire
   __atomic_fetch_add(&rwlk->writer, 1, __ATOMIC_SEQ_CST);
+
   __sync_synchronize();
-  acquire(&rwlk->l);
-  __sync_synchronize();
-  while (__atomic_load_n(&rwlk->reader, __ATOMIC_SEQ_CST) > 0) {
+
+  while(__sync_lock_test_and_set(&rwlk->locked, 1)) {
+    //spin
+  }
+
+  while (__atomic_load_n(&rwlk->reader, __ATOMIC_SEQ_CST)) {
+    //spin
   }
 }
 
@@ -166,7 +172,8 @@ write_release_inner(struct rwspinlock *rwlk)
   // Replace this with your implementation.
   __atomic_fetch_sub(&rwlk->writer, 1, __ATOMIC_SEQ_CST);
   __sync_synchronize();
-  release(&rwlk->l);
+  //release(&rwlk->l);
+  __sync_lock_release(&rwlk->locked);
 }
 
 void
@@ -201,9 +208,12 @@ void
 initrwlock(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  initlock(&rwlk->l, "rwlk");
+  //initlock(&rwlk, "rwlk");
+  //rwlk->name = name;
+  rwlk->locked = 0;
   rwlk->reader = 0;
   rwlk->writer = 0;
+  __sync_synchronize();
 }
 
 // Test rwspinlock implementation.
