@@ -24,7 +24,7 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 // there should be one superblock per disk device, but we run with
 // only one device
-struct superblock sb; 
+struct superblock sb;
 
 // Read the super block.
 static void
@@ -183,7 +183,7 @@ void
 iinit()
 {
   int i = 0;
-  
+
   initlock(&itable.lock, "itable");
   for(i = 0; i < NINODE; i++) {
     initsleeplock(&itable.inode[i].lock, "inode");
@@ -439,7 +439,43 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
 
+  if (bn < NINDIRECT*NINDIRECT) {
+    // Load d-indirect block, allocating if necessary
+    if((addr = ip->addrs[NDIRECT+1]) == 0){
+      addr = balloc(ip->dev);
+      if (addr == 0)
+        return 0;
+      ip->addrs[NDIRECT+1] = addr;
+    }
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+
+    // Load Level 0 block, allocating if necessary
+    uint bn_l1 = bn/NINDIRECT;
+    if ((addr = a[bn_l1]) == 0) {
+      addr = balloc(ip->dev);
+      if (addr == 0)
+        return 0;
+      a[bn_l1] = addr;
+      log_write(bp);
+    }
+    brelse(bp);
+
+    uint bn_l0 = bn%NINDIRECT;
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    if((addr = a[bn_l0]) == 0){
+      addr = balloc(ip->dev);
+      if(addr){
+        a[bn_l0] = addr;
+        log_write(bp);
+      }
+    }
+    brelse(bp);
+    return addr;
+  }
   panic("bmap: out of range");
 }
 
@@ -469,6 +505,27 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  if(ip->addrs[NDIRECT+1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){
+      if(a[j]) {
+        int k;
+        struct buf *bp1 = bread(ip->dev, a[j]);
+        uint *a1 = (uint*)bp1->data;
+        for (k = 0; k < NINDIRECT; k++) {
+          if (a1[k])
+            bfree(ip->dev, a1[k]);
+        }
+        brelse(bp1);
+        bfree(ip->dev, a[j]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT+1]);
+    ip->addrs[NDIRECT+1] = 0;
   }
 
   ip->size = 0;
