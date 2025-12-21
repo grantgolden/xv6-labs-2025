@@ -562,8 +562,7 @@ sys_symlink(void)
   }
 
   //create return locked inode, so need to be unlocked
-  iunlock(ip);
-  iput(ip);
+  iunlockput(ip);
 
   end_op();
   return 0;
