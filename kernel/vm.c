@@ -5,8 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "spinlock.h"
-#include "proc.h"
 #include "fs.h"
+#include "proc.h"
+#include "fcntl.h"
+#include "sleeplock.h"
+#include "file.h"
 
 /*
  * the kernel's page table.
@@ -47,7 +50,7 @@ kvmmake(void)
 
   // allocate and map a kernel stack for each process.
   proc_mapstacks(kpgtbl);
-  
+
   return kpgtbl;
 }
 
@@ -156,7 +159,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 
   if(size == 0)
     panic("mappages: size");
-  
+
   a = va;
   last = va + size - PGSIZE;
   for(;;){
@@ -200,7 +203,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0) // leaf page table entry allocated?
-      continue;   
+      continue;
     if((*pte & PTE_V) == 0)  // has physical page been allocated?
       continue;
     if(do_free){
@@ -329,7 +332,7 @@ void
 uvmclear(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
-  
+
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     panic("uvmclear");
@@ -349,7 +352,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     va0 = PGROUNDDOWN(dstva);
     if(va0 >= MAXVA)
       return -1;
-  
+
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0) {
       if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
@@ -361,7 +364,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     // forbid copyout over read-only user text pages.
     if((*pte & PTE_W) == 0)
       return -1;
-      
+
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
@@ -445,6 +448,59 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   }
 }
 
+
+uint64
+mmapfault(uint64 va)
+{
+  struct proc *p = myproc();
+  uint64 mem;
+
+  for (int i = 0; i < 16; i++) {
+    // va is in maped regions
+    if (p->vma[i].valid && (va >= p->vma[i].va && va < (p->vma[i].va+p->vma[i].len))) {
+      va = PGROUNDDOWN(va);
+      if(ismapped(p->pagetable, va)) {
+        return 0;
+      }
+      mem = (uint64) kalloc();
+      if(mem == 0)
+        return 0;
+      memset((void *) mem, 0, PGSIZE);
+
+      int prot = p->vma[i].prot;
+      int perm = PTE_U;
+
+      if (prot&PROT_READ)
+        perm |= PTE_R;
+
+      if (prot&PROT_WRITE)
+        perm |= PTE_W;
+
+      if (mappages(p->pagetable, va, PGSIZE, mem, perm) != 0) {
+        kfree((void *)mem);
+        return 0;
+      }
+
+      // read file into phyiscal page
+      struct file *f = p->vma[i].f;
+      int r = 0;
+      int off;
+      ilock(f->ip);
+      off = va - p->vma[i].va;
+      if((r = readi(f->ip, 0, mem, off, PGSIZE)) > 0) {
+        f->off += r;
+      }
+      iunlock(f->ip);
+
+      return mem;
+
+    }
+  }
+
+  return 0;
+
+}
+
 // allocate and map user memory if process is referencing a page
 // that was lazily allocated in sys_sbrk().
 // returns 0 if va is invalid or already mapped, or if
@@ -456,7 +512,8 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   struct proc *p = myproc();
 
   if (va >= p->sz)
-    return 0;
+    return mmapfault(va);
+
   va = PGROUNDDOWN(va);
   if(ismapped(pagetable, va)) {
     return 0;
@@ -484,3 +541,4 @@ ismapped(pagetable_t pagetable, uint64 va)
   }
   return 0;
 }
+

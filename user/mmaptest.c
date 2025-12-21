@@ -109,6 +109,7 @@ mmap_test(void)
   // offset in the file.
   //
   char *p = mmap(0, PGSIZE*2, PROT_READ, MAP_PRIVATE, fd, 0);
+
   if (p == MAP_FAILED)
     err("mmap (1)");
   _v1(p);
@@ -197,8 +198,11 @@ mmap_test(void)
     if (buf[i] != 'B')
       err("file page 0 does not contain modifications");
   }
-  if(read(fd, buf, PGSIZE) != PGSIZE/2)
+  int r;
+  if((r=read(fd, buf, PGSIZE)) != PGSIZE/2) {
+    printf("r: %d\n", r);
     err("dirty read #2");
+  }
   for (i = 0; i < PGSIZE/2; i++){
     if (buf[i] != 'C')
       err("file page 1 does not contain modifications");
@@ -353,9 +357,9 @@ more_test()
   int fd, pid;
   char *p;
   const char * const f = "mmap.dur";
-  
+
   printf("test munmap prevents access\n");
-  
+
   makefile(f);
   if ((fd = open(f, O_RDWR)) == -1)
     err("open");

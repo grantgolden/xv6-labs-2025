@@ -28,6 +28,20 @@ struct cpu {
 
 extern struct cpu cpus[NCPU];
 
+
+//void* mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
+
+struct vma {
+  uint64 va;
+  size_t len;
+  int prot;
+  int flags;
+  struct file *f;
+  off_t offset;
+  int valid;
+};
+
+
 // per-process data for the trap handling code in trampoline.S.
 // sits in a page by itself just under the trampoline page in the
 // user page table. not specially mapped in the kernel page table.
@@ -104,4 +118,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  struct vma vma[16]; // vma array of fixed 16
 };

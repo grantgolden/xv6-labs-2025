@@ -15,6 +15,7 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
+#include "memlayout.h"
 
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
@@ -85,7 +86,7 @@ sys_write(void)
   struct file *f;
   int n;
   uint64 p;
-  
+
   argaddr(1, &p);
   argint(2, &n);
   if(argfd(0, 0, &f) < 0)
@@ -412,7 +413,7 @@ sys_chdir(void)
   char path[MAXPATH];
   struct inode *ip;
   struct proc *p = myproc();
-  
+
   begin_op();
   if(argstr(0, path, MAXPATH) < 0 || (ip = namei(path)) == 0){
     end_op();
@@ -501,5 +502,155 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+//void* mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
+uint64
+sys_mmap(void)
+{
+  uint64 addr;
+  int len;
+  int prot;
+  int flags;
+  int fd;
+  int offset;
+  struct file *f;
+
+  struct proc *p = myproc();
+
+  argaddr(0, &addr); //always 0
+  argint(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+
+  //argint(4, &fd);
+  if (argfd(4, &fd, &f) < 0)
+    return -1;
+
+  if (!f->readable && ((prot&PROT_READ)||(flags == MAP_PRIVATE)))
+    return -1;
+
+  if (!f->writable && ((prot&PROT_WRITE) && (flags == MAP_SHARED)))
+    return -1;
+
+  argint(5, &offset); //always 0
+
+  // get a free VMA
+  struct vma *vmp = 0;
+  uint64 start = MMAPEND;
+
+  for (int i = 0; i < 16; i++) {
+    if (vmp == 0 && p->vma[i].valid == 0) {
+      vmp = &p->vma[i];
+      vmp->valid = 1;
+    } else if (p->vma[i].valid == 1 && start > p->vma[i].va) {
+      start = p->vma[i].va;
+    }
+  }
+
+  if (!vmp)
+    panic("no VMA available\n");
+
+  start -= len;
+  start = PGROUNDDOWN(start);
+
+  vmp->va = start;
+  vmp->len = len;
+  vmp->f = filedup(f);
+  vmp->prot = prot;
+  vmp->flags = flags;
+  vmp->offset = offset;
+
+  return start;
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 va;
+  int len;
+  argaddr(0, &va);
+  argint(1, &len);
+
+  if ((va%PGSIZE) || (len%PGSIZE))
+    panic("addr and len not multple of PGSIZE\n");
+
+  struct vma *vmp = 0;
+
+  struct proc *p = myproc();
+  uint64 a, end;
+
+  for (int i = 0; i < 16; i++) {
+    // va is in maped regions
+    vmp=&p->vma[i];
+    if (vmp->valid && (va >= vmp->va && va < (vmp->va+vmp->len))) {
+      //if flags MAP_SHARED, write modified pages to file
+      if (va > vmp->va) {
+        if ((va+len) < (vmp->va+vmp->len))
+          panic("punch a hole in the midle of region");
+        else
+          end = vmp->va + vmp->len;
+      } else
+        end = va + (len > vmp->len ? vmp->len : len);
+
+      int n = end - va;
+      //printf("n: %d, page num: %x\n", n, n/PGSIZE);
+
+      if (vmp->flags == MAP_SHARED) {
+        pte_t *pte;
+        for (a = va; a < end; a += PGSIZE) {
+          if((pte = walk(p->pagetable, a, 0)) == 0) // leaf page table entry allocated?
+            continue;
+          if((*pte & PTE_V) == 0)  // has physical page been allocated?
+            continue;
+          struct file *f;
+          int r;
+          //dirty pages written to file
+          f = vmp->f;
+          if(*pte & PTE_D) {
+            begin_op();
+            ilock(f->ip);
+            // file offset
+            int off = a - vmp->va + vmp->offset;
+            //printf("off: %x, fsize: %x, vmp->offset: %lx\n", off, f->ip->size, vmp->offset);
+            // unmaped physical pages larger than file size
+            if (off >= f->ip->size) {
+              iunlock(f->ip);
+              end_op();
+              continue;
+            }
+            int size = PGSIZE;
+            if ((off+PGSIZE) > f->ip->size)
+              size = f->ip->size - off;
+            r = writei(f->ip, 1, a, off, size);
+            iunlock(f->ip);
+            end_op();
+            if (r != size) {
+              printf("write failed, r: %x\n", r);
+              return -1;
+            }
+          }
+        }
+      }
+      uvmunmap(p->pagetable, va, n/PGSIZE, 1);
+      // if unmaped all pages, dereference the file
+      if (va == vmp->va && len >= vmp->len) {
+        filedref(vmp->f);
+        memset(vmp, 0, sizeof(struct vma));
+      } else {
+        // not all pages, at the start
+        if (va == vmp->va) {
+          vmp->va += len;
+          vmp->len -= len;
+          vmp->offset += len;
+        } else { // at the end
+          vmp->len = (va - vmp->va);
+        }
+      }
+      break;
+    }
+  }
+
   return 0;
 }

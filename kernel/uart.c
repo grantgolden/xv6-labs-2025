@@ -7,8 +7,8 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
-#include "proc.h"
 #include "defs.h"
+#include "proc.h"
 
 // the UART control registers are memory-mapped
 // at address UART0. this macro returns the
@@ -83,13 +83,13 @@ uartwrite(char buf[], int n)
   acquire(&tx_lock);
 
   int i = 0;
-  while(i < n){ 
+  while(i < n){
     while(tx_busy != 0){
       // wait for a UART transmit-complete interrupt
       // to set tx_busy to 0.
       sleep(&tx_chan, &tx_lock);
-    }   
-      
+    }
+
     WriteReg(THR, buf[i]);
     i += 1;
     tx_busy = 1;

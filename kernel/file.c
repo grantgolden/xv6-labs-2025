@@ -55,6 +55,18 @@ filedup(struct file *f)
   return f;
 }
 
+// Decrement ref count for file f.
+struct file*
+filedref(struct file *f)
+{
+  acquire(&ftable.lock);
+  if(f->ref < 1)
+    panic("filedref");
+  f->ref--;
+  release(&ftable.lock);
+  return f;
+}
+
 // Close file f.  (Decrement ref count, close when reaches 0.)
 void
 fileclose(struct file *f)
@@ -89,7 +101,7 @@ filestat(struct file *f, uint64 addr)
 {
   struct proc *p = myproc();
   struct stat st;
-  
+
   if(f->type == FD_INODE || f->type == FD_DEVICE){
     ilock(f->ip);
     stati(f->ip, &st);
